@@ -1,11 +1,40 @@
 {
-  "name": "read_file",
-  "description": "Read a file.",
+  "name": "code_read_file",
+  "description": "Read one file of Ledgerline's codebase by its exact path, relative to the repository root, as code_search prints it (src/api/uploads.ts). Use it after a search has named a likely file, to confirm that file holds the code the issue is about. Paths are case-sensitive: src/Report.ts and src/report.ts are different files. The config/ directory cannot be read. It costs one local read and no money, but a long file costs many tokens, so read the file a search pointed to rather than browsing.\n\nReturns JSON: {\"path\": ..., \"total_lines\": n, \"total_chars\": n, \"shown_chars\": n, \"truncated\": false, \"content\": <the file's text>}. A response is capped: concise returns at most the first 6,000 characters, detailed at most the first 20,000; a longer file comes back cut at the cap with \"truncated\": true. An empty file is a success with \"content\": \"\" and total_lines 0: the file exists and has nothing in it. A path that does not exist is an error that names the closest existing paths.",
   "input_schema": {
     "type": "object",
     "properties": {
-      "path": {"type": "string", "description": "File path"}
+      "path": {
+        "type": "string",
+        "description": "The file's path relative to the repository root, exactly as a search result printed it, with the same capital letters: src/util/retry.ts, not /src/util/retry.ts, ./src/util/retry.ts or retry.ts. A directory is not a file."
+      },
+      "response_format": {
+        "type": "string",
+        "enum": ["concise", "detailed"],
+        "description": "concise, the cheap default, returns the first 6,000 characters, which holds most of this codebase's files whole. detailed returns up to 20,000 characters and costs up to three times as much; choose it only when a concise read came back \"truncated\": true and the code you need is past the cut."
+      }
     },
-    "required": ["path"]
-  }
+    "required": ["path", "response_format"],
+    "additionalProperties": false
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "path": {"type": "string"},
+      "total_lines": {"type": "integer"},
+      "total_chars": {"type": "integer"},
+      "shown_chars": {"type": "integer"},
+      "truncated": {"type": "boolean"},
+      "content": {"type": "string"}
+    },
+    "required": ["path", "total_lines", "total_chars", "shown_chars", "truncated", "content"],
+    "additionalProperties": false
+  },
+  "strict": true,
+  "examples": [
+    {"input": {"path": "src/util/retry.ts", "response_format": "concise"},
+     "note": "The typical call: a path exactly as code_search printed it, concise."},
+    {"input": {"path": "src/Report.ts", "response_format": "detailed"},
+     "note": "A hard case: three files differ only by case or extension (src/Report.ts, src/report.tsx, src/reports.ts); keep the capital letters the search printed, and ask for detailed only because a concise read came back truncated."}
+  ]
 }

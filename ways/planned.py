@@ -62,6 +62,13 @@ def role(name: str | None) -> str | None:
     return next((r for r in ROLES if tool_for(r) == name), None)
 
 
+def needs_fill(value) -> bool:
+    """Whether a plan's argument is left for the executor: "$fill", or a string with
+    "$fill" inside it, such as a comment template the planner pre-wrote around it. A
+    half-written value is never sent as it stands."""
+    return isinstance(value, str) and FILL in value
+
+
 def allows_null(spec: dict) -> bool:
     """Whether a property's schema takes null: "type": [..., "null"], or a null branch."""
     kind = spec.get("type")
@@ -155,7 +162,7 @@ class Executor:
         return self.record(step, args, result)
 
     def filled(self, step: dict, args: dict) -> dict | None:
-        to_fill = [k for k, v in args.items() if v == FILL]
+        to_fill = [k for k, v in args.items() if needs_fill(v)]
         if not to_fill:
             return args
         filled = self.fill(step, args, to_fill)
@@ -173,7 +180,7 @@ class Executor:
         schema = next((t for t in self.ctx.tools.schemas if t["name"] == step["tool"]), None)
         if schema is None:
             return None
-        fixed = {k: v for k, v in args.items() if v != FILL}
+        fixed = {k: v for k, v in args.items() if not needs_fill(v)}
         props = (schema.get("input_schema") or {}).get("properties") or {}
         nullable = {k for k, s in props.items() if isinstance(s, dict) and allows_null(s)}
         for _ in range(MAX_FILL_TRIES):
@@ -186,7 +193,7 @@ class Executor:
                     self.refuse(step, call)       # the boundary: never run, always traced
                     continue
                 filled = {**{k: v for k, v in call.input.items() if k in props}, **fixed}   # the plan's values win
-                if any(k not in filled or filled[k] in ("", FILL) or (filled[k] is None and k not in nullable)
+                if any(k not in filled or filled[k] == "" or needs_fill(filled[k]) or (filled[k] is None and k not in nullable)
                        for k in keys):
                     continue
                 if role(step["tool"]) == "comment":

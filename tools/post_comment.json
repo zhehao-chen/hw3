@@ -1,12 +1,37 @@
 {
-  "name": "post_comment",
-  "description": "Post a comment on an issue.",
+  "name": "tracker_post_comment",
+  "description": "Post the triage comment on one issue in Ledgerline's issue tracker. It is public and permanent: the reporter reads it, and it cannot be edited or deleted, so post it once, last, after the file is chosen and any pull request is opened. Posting the same comment again in the same run writes nothing new and returns the first comment.\n\nReturns JSON: {\"comment\": \"comment-12\", \"issue\": \"issue-4417\", \"chars\": n, \"replayed\": false}; \"replayed\": true means this exact comment had already been posted, and nothing new was written. There is no empty result: a success always names the comment it wrote. The body is limited to at most 4,000 characters; an empty body, a longer one, or an issue that does not exist is an error and posts nothing.",
   "input_schema": {
     "type": "object",
     "properties": {
-      "number": {"type": "integer", "description": "Issue number"},
-      "body": {"type": "string", "description": "Comment text"}
+      "number": {
+        "type": "integer",
+        "description": "The issue's number, as a bare integer: 4417 for issue-4417. It must be the issue you were asked to triage; a comment on another issue cannot be taken back."
+      },
+      "body": {
+        "type": "string",
+        "description": "The comment's text, 1 to 4,000 characters, in Markdown. Its first two lines are exactly \"label: <bug | feature | question | docs>\" and \"file: <path relative to the repository root, or none>\"; then a short reason a reader can check against the code. Everything in it is shown to the reporter as written."
+      }
     },
-    "required": ["number", "body"]
-  }
+    "required": ["number", "body"],
+    "additionalProperties": false
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "comment": {"type": "string"},
+      "issue": {"type": "string"},
+      "chars": {"type": "integer"},
+      "replayed": {"type": "boolean"}
+    },
+    "required": ["comment", "issue", "chars", "replayed"],
+    "additionalProperties": false
+  },
+  "strict": true,
+  "examples": [
+    {"input": {"number": 4417, "body": "label: bug\nfile: src/util/retry.ts\n\nwithRetry never waits between attempts: backoffDelay is computed but not awaited."},
+     "note": "The typical call: label and file on the first two lines, then one checkable reason."},
+    {"input": {"number": 4093, "body": "label: question\nfile: none\n\nThe CSV export already includes archived reports when \"Include archived\" is ticked; nothing in the code needs to change."},
+     "note": "A hard case: a question that needs no change. The file line still appears, and says none, never an empty line or a guess."}
+  ]
 }

@@ -12,11 +12,14 @@ Submit the plan with submit_plan, once. Each step:
 
 - id: 1, 2, 3, ... in order.
 - action: what the step does, in a few words.
-- tool: exactly one tool from the list you are given, by its name.
+- tool: exactly one tool from the list you are given, by its name, written exactly
+  as the list writes it, with no prefix such as "functions.".
 - args_json: the tool's arguments as a JSON object written as a string, for
   example "{\"number\": 4191}". Write "$fill" for any value that depends on what an
-  earlier step finds: search terms, a file path, the comment's text. The issue
-  number is the one value you know now.
+  earlier step finds: search terms, a file path, the comment's text. A value is
+  either the whole "$fill" or fixed now; never write part of it around "$fill".
+  The comment's body is always exactly "$fill": the executor writes all of it,
+  label and file lines included. The issue number is the one value you know now.
 - depends_on: the ids of earlier steps whose results this step uses. Never a later
   step.
 - expected_result: what the step returns when it worked, something a program could

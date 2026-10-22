@@ -39,11 +39,26 @@ def _tool_list(tool_schemas: list[dict]) -> str:
     return "\n".join(lines)
 
 
+# A vendor's own namespace for function tools, which some models write into a plan's
+# tool names as text ("functions.code_search"). It is the vendor's artifact, not a
+# choice of tool, so the harness strips it rather than asking the model to re-plan.
+VENDOR_PREFIXES = ("functions.",)
+
+
+def _bare_tool(name):
+    for prefix in VENDOR_PREFIXES:
+        if isinstance(name, str) and name.startswith(prefix):
+            return name[len(prefix):]
+    return name
+
+
 def _submitted(response) -> list[dict]:
     for call in response.tool_calls:
         if call.name == SUBMIT_PLAN["name"]:
             steps = call.input.get("steps")
-            return steps if isinstance(steps, list) else []
+            if not isinstance(steps, list):
+                return []
+            return [{**s, "tool": _bare_tool(s.get("tool"))} if isinstance(s, dict) else s for s in steps]
     return []
 
 

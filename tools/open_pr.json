@@ -1,14 +1,49 @@
 {
-  "name": "open_pr",
-  "description": "Open a pull request.",
+  "name": "pr_open_draft",
+  "description": "Open one draft pull request on Ledgerline's repository that proposes, in prose, the change for one issue. The branch is always repomind/issue-<number>; the remote needs no commits, and nothing checks the proposed change. Open it before the triage comment and only when the triage names a file: an issue whose file is none gets no pull request. A draft PR can be closed later, unlike a comment. Opening it again in the same run writes nothing new and returns the first PR.\n\nReturns JSON: {\"pr\": \"pr-7\", \"issue\": \"issue-4417\", \"branch\": \"repomind/issue-4417\", \"state\": \"open\", \"draft\": true, \"replayed\": false}; \"replayed\": true means this PR was already open, and nothing new was written. There is no empty result: a success always names the PR. The title is limited to at most 120 characters and the body to at most 4,000; a longer one, an empty one, a branch other than repomind/issue-<number>, or an issue that does not exist is an error and opens nothing.",
   "input_schema": {
     "type": "object",
     "properties": {
-      "number": {"type": "integer", "description": "Issue number"},
-      "branch": {"type": "string", "description": "Branch"},
-      "title": {"type": "string", "description": "Title"},
-      "body": {"type": "string", "description": "Body"}
+      "number": {
+        "type": "integer",
+        "description": "The issue's number, as a bare integer: 4417 for issue-4417. The PR is linked to this issue."
+      },
+      "branch": {
+        "type": "string",
+        "description": "Exactly repomind/issue-<number>, with the same number: repomind/issue-4417 for issue 4417. Any other branch is refused, so that a repeat of this call finds the PR it already opened."
+      },
+      "title": {
+        "type": "string",
+        "description": "One line, 1 to 120 characters, saying what the change fixes or adds, e.g. \"Await the backoff delay in withRetry\". Shown in the PR list."
+      },
+      "body": {
+        "type": "string",
+        "description": "1 to 4,000 characters of Markdown. Name the file the triage chose, relative to the repository root, on its own line as \"file: <path>\", then propose the change in prose: what is wrong, where, and what to change. No code diff is needed."
+      }
     },
-    "required": ["number", "branch", "title", "body"]
-  }
+    "required": ["number", "branch", "title", "body"],
+    "additionalProperties": false
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "pr": {"type": "string"},
+      "issue": {"type": "string"},
+      "branch": {"type": "string"},
+      "state": {"type": "string"},
+      "draft": {"type": "boolean"},
+      "replayed": {"type": "boolean"}
+    },
+    "required": ["pr", "issue", "branch", "state", "draft", "replayed"],
+    "additionalProperties": false
+  },
+  "strict": true,
+  "examples": [
+    {"input": {"number": 4417, "branch": "repomind/issue-4417", "title": "Await the backoff delay in withRetry",
+               "body": "file: src/util/retry.ts\n\nwithRetry computes backoffDelay before each retry but never awaits it, so all attempts fire at once. Await the delay before the next attempt."},
+     "note": "The typical call: the branch built from the issue number, the file on its own line, the change in prose."},
+    {"input": {"number": 4093, "branch": "repomind/issue-4093", "title": "Document the export endpoint's date range parameters",
+               "body": "file: docs/API.md\n\nThe Export section does not say which date range parameters the endpoint accepts or in which time zone. Add them to that section, with one example request."},
+     "note": "A hard case: a docs issue, whose file is a document, still gets a PR. The branch keeps the exact form repomind/issue-<number>; never a descriptive branch name such as fix/export-docs."}
+  ]
 }

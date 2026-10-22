@@ -1,14 +1,64 @@
 {
-  "name": "search_repo",
-  "description": "Search the code.",
+  "name": "code_search",
+  "description": "Search Ledgerline's codebase for a literal piece of text, case-insensitively, line by line. It matches the contents of lines, never file names, and never the config/ directory. Use it to find which files contain an error message, an identifier or a word from the issue, then read the most likely file with code_read_file. It costs one local read and no money; each call costs a turn, so search for one distinctive term at a time rather than a sentence.\n\nReturns JSON: {\"query\": <your query, echoed>, \"path_glob\": <your filter, echoed>, \"query_valid\": true, \"count\": <every matching line>, \"shown\": <lines in results>, \"truncated\": <true when count > shown>, \"source\": \"index\" or \"live_files\", \"index_age\": <how old the index is, e.g. \"22 days ago\">, \"results\": [{\"path\": \"src/api/uploads.ts\", \"line\": 42, \"text\": ...}]}, in path order. A response is capped: concise shows at most 10 matching lines, each cut to 120 characters; detailed shows at most 20, each cut to 300 characters. When \"truncated\" is true, narrow the query or set path_glob rather than asking again.\n\nNo match is a success: \"count\": 0, \"results\": [], \"query_valid\": true means the text appears nowhere in the searched files; try a different term. A malformed search is an error, never an empty result: a query that is empty or only whitespace, a query longer than 200 characters, or a path_glob that is not a valid glob.",
   "input_schema": {
     "type": "object",
     "properties": {
-      "query": {"type": "string", "description": "Text to look for"},
-      "max_results": {"type": "integer", "description": "How many results. Default 10."},
-      "filter": {"type": "string", "description": "Optional filter expression"},
-      "deep": {"type": "boolean", "description": "Whether to do a deep search. Default false."}
+      "query": {
+        "type": "string",
+        "description": "The literal text to find, 1 to 200 characters, matched case-insensitively as a substring of one line. No operators: AND, OR, quotes, wildcards and regular expressions are searched for as literal characters. A short distinctive term (an identifier such as withRetry, or a phrase from an error message) finds the responsible line; a long sentence usually finds nothing."
+      },
+      "path_glob": {
+        "type": ["string", "null"],
+        "description": "null searches every file. A glob relative to the repository root, such as \"src/**/*.ts\" or \"src/{api,db}/*.ts\", restricts the search to matching files: choose it when a query matches too many lines (\"truncated\": true) or the issue names an area of the code. It uses letters, digits, / . _ - and the wildcards * ? [ ] { }; it cannot start with / or contain .."
+      },
+      "source": {
+        "type": "string",
+        "enum": ["index", "live_files"],
+        "description": "index, the normal choice, searches the prebuilt index, which is fast but as old as its index_age. live_files reads every file from disk instead: slower, and needed only when the code may have changed since the index was built, or when an index search found nothing that the issue says must exist."
+      },
+      "response_format": {
+        "type": "string",
+        "enum": ["concise", "detailed"],
+        "description": "concise, the cheap default, returns at most 10 matching lines of 120 characters: enough to choose a file. detailed returns at most 20 lines of 300 characters and costs about four times the tokens; choose it only when concise lines were cut before the part you need."
+      }
     },
-    "required": ["query"]
-  }
+    "required": ["query", "path_glob", "source", "response_format"],
+    "additionalProperties": false
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "query": {"type": "string"},
+      "path_glob": {"type": ["string", "null"]},
+      "query_valid": {"type": "boolean"},
+      "count": {"type": "integer"},
+      "shown": {"type": "integer"},
+      "truncated": {"type": "boolean"},
+      "source": {"type": "string", "enum": ["index", "live_files"]},
+      "index_age": {"type": ["string", "null"]},
+      "results": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "path": {"type": "string"},
+            "line": {"type": "integer"},
+            "text": {"type": "string"}
+          },
+          "required": ["path", "line", "text"],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": ["query", "path_glob", "query_valid", "count", "shown", "truncated", "source", "index_age", "results"],
+    "additionalProperties": false
+  },
+  "strict": true,
+  "examples": [
+    {"input": {"query": "withRetry", "path_glob": null, "source": "index", "response_format": "concise"},
+     "note": "The typical call: one identifier, the whole codebase, the index, concise."},
+    {"input": {"query": "upload failed", "path_glob": "src/api/*.ts", "source": "index", "response_format": "detailed"},
+     "note": "A hard case: a phrase from an error message that matched too many lines, narrowed to one directory with a glob (not a filter expression such as dir:src/api), with detailed lines because the concise ones were cut."}
+  ]
 }

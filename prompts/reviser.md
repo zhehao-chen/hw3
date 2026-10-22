@@ -10,7 +10,8 @@ Repair, do not replace. Keep every step whose status is "done" exactly as it is.
 You may change a step that failed, to retry it: for a search, change its action to
 say what to look for instead, and keep "$fill" for its query, which the executor
 fills in. You may change or add any step not yet run. Every step still needs one
-tool from the plan's list, an expected_result, and depends_on naming only earlier
-steps, and the last step is post_comment.
+tool from the plan's list, named exactly as the list writes it with no prefix such
+as "functions.", an expected_result, and depends_on naming only earlier steps, and
+the last step is tracker_post_comment, whose body is exactly "$fill".
 
 Submit the whole repaired plan with submit_plan, once.
