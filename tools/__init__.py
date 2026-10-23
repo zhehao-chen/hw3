@@ -27,9 +27,11 @@ one per run with `default_tools(ctx)`.
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import json
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import ModuleType
@@ -45,7 +47,19 @@ SENT = ("name", "description", "input_schema", "strict")
 
 
 class ToolError(Exception):
-    """A tool failed in a way the model can be told about. Becomes an is_error result."""
+    """A tool failed in a way the model can be told about. Becomes an is_error result.
+
+    The message is the repair fact: what was wrong and what would be right, first.
+    `retry` says whether calling again can work; most tool failures are permanent,
+    so the default tells the model that the same call will fail again."""
+
+    def __init__(self, message: str, *, retry: str | None = None):
+        super().__init__(message)
+        self.retry = retry or NO_RETRY
+
+
+# What a permanent failure tells the model about calling again.
+NO_RETRY = "Calling again with the same arguments will not succeed."
 
 
 @dataclass
@@ -72,7 +86,7 @@ def load_definition(module: str) -> dict:
 class ToolRegistry:
     def __init__(self, ctx: RunContext, modules=MODULES):
         self.ctx = ctx
-        self.hooks: list = []
+        self.hooks: list = [allow_every_call]   # each hook(name, tool_input) runs before every call
         self._tools: dict[str, tuple[dict, ModuleType]] = {}
         for module in modules:
             definition = load_definition(module)
@@ -110,48 +124,175 @@ class ToolRegistry:
           4. the tool's run(); a ToolError comes back as an is_error result;
           5. the result against the tool's output_schema, before the model sees it.
 
-        A call that fails 1 to 3 never runs the tool, so it writes nothing.
+        Before stage 2, every hook in `self.hooks` may deny the call (fail closed: a
+        hook that raises denies it). A call that is denied or fails 1 to 3 never runs
+        the tool, so it writes nothing. Every attempt leaves one line in the call
+        record (runs/<run_id>.calls.jsonl), whatever happened to it.
 
         `plan_step` is the id of the plan step the call runs for, from ctx.call_tool,
         or None when the model chose the call (the agent's loop)."""
         start = time.monotonic()
+        args = tool_input
+        attempt = {"key": None, "n": 1}       # a write's key and attempt, for its call-record lines
 
-        def done(content: str, is_error: bool) -> ToolResult:
-            return ToolResult(content, is_error, time.monotonic() - start)
+        def done(content: str, is_error: bool, outcome: str) -> ToolResult:
+            result = ToolResult(content, is_error, time.monotonic() - start)
+            self._record(name, args, plan_step, outcome, result, key=attempt["key"], attempt=attempt["n"])
+            return result
 
         # 1. protocol
         entry = self._tools.get(name)
         if entry is None:
             self._log_protocol(f"unknown tool {name!r}; the registry has {self.names()}; input {tool_input!r}")
-            return done(GENERIC_PROTOCOL_ERROR, True)
+            return done(GENERIC_PROTOCOL_ERROR, True, "protocol")
         if not isinstance(tool_input, dict) or set(tool_input) & WRAPPED_INPUT:
             self._log_protocol(f"{name}: arguments are not a JSON object: {tool_input!r}")
-            return done(GENERIC_PROTOCOL_ERROR, True)
+            args = {"_not_an_object": repr(tool_input)[:200]}
+            return done(GENERIC_PROTOCOL_ERROR, True, "protocol")
         definition, module = entry
         schema = definition.get("input_schema") or {}
 
+        # the hooks, before anything about the arguments is trusted
+        reason = self._denied(name, tool_input)
+        if reason is not None:
+            return done(cap(f"Error: {name} was denied by a policy check and did not run: {reason}. "
+                            "Do not retry it."), True, "denied")
+
         # 2. schema
-        tool_input = normalize_enums(tool_input, schema)
+        tool_input = args = normalize_enums(tool_input, schema)
         problems = schema_errors(tool_input, schema)
         # 3. content, only on arguments whose structure is right
         if not problems and hasattr(module, "check"):
             problems = module.check(tool_input)
         if problems:
-            return done(rejection(name, problems), True)
+            return done(rejection(name, problems), True, "rejected")
 
-        # 4. run
+        # 4. run: transient failures retried here, below the model; a ToolError goes to it.
+        #    A write goes through the gate: its key, the check before every attempt, the
+        #    read-back after a timeout, at most WRITE_ATTEMPTS attempts.
         try:
-            content = module.run(self.ctx, **tool_input)
+            if is_write(module):
+                content = self._write(name, module, tool_input, plan_step, start, attempt)
+            else:
+                content = self._run(name, module, tool_input)
+        except WriteUnconfirmed:
+            raise                                # the third exit: the executor ends the run escalated
         except ToolError as exc:
-            return done(f"Error: {exc}", True)
+            return done(cap(f"Error: {exc} {exc.retry}"), True, "error")
+        except Exception as exc:                 # a fault in the tool: for you, and the run ends
+            self._log_protocol(f"{name}: the tool raised {type(exc).__name__}: {exc}; input {tool_input!r}")
+            self._record(name, args, plan_step, "error",
+                         ToolResult(f"{type(exc).__name__}: {exc}", True, time.monotonic() - start))
+            raise
 
         # 5. the result's shape
         broken = result_errors(content, definition.get("output_schema"))
         if broken:
             self._log_protocol(f"{name}: result does not fit its output_schema: {broken}; result {content[:500]!r}")
             return done(f"Error: {name} returned a result in an unexpected shape. This is a fault in the tool, "
-                        f"not in your arguments; do not retry with other arguments.", True)
-        return done(content, False)
+                        f"not in your arguments; do not retry with other arguments.", True, "error")
+        return done(content, False, "ok")
+
+    def _denied(self, name: str, tool_input: dict) -> str | None:
+        """Run every hook. The reason the first one that denies gives, or None when all
+        allow. Fail closed: a hook that raises denies the call, and the error is logged."""
+        for hook in list(self.hooks):
+            try:
+                verdict = hook(name, tool_input)
+            except Exception as exc:
+                self._log_protocol(f"{name}: hook {getattr(hook, '__name__', hook)!r} raised "
+                                   f"{type(exc).__name__}: {exc}; the call is denied")
+                return "a policy check failed to run, so the call is denied"
+            if verdict is not None:
+                return str(verdict) or "denied"
+        return None
+
+    def _record(self, name: str, args, plan_step, outcome: str, result: ToolResult,
+                key: str | None = None, attempt: int = 1) -> None:
+        """One line in runs/<run_id>.calls.jsonl, written here, at the boundary, whatever
+        the agent later says it did."""
+        calls = getattr(self.ctx, "calls", None)
+        if calls is None:
+            return
+        calls.write(tool=name, args=args if isinstance(args, dict) else {"_not_an_object": repr(args)[:200]},
+                    plan_step=plan_step, key=key, attempt=attempt, outcome=outcome, is_error=result.is_error,
+                    result=result.content, latency_s=result.latency_s, cost_usd=0.0)
+
+    def _write(self, name: str, module: ModuleType, args: dict, plan_step, start: float, attempt: dict) -> str:
+        """A write that may already have happened, made safe to repeat (Part C):
+
+          - the key is the harness's, never the model's: a hash of the run, the plan
+            step and the arguments (write_key), the same on every attempt; under
+            KEY_MODE=uuid, a fresh random key on every attempt instead (the control);
+          - before every attempt, one read: has this write already happened? If so,
+            its existing result is returned and nothing is written;
+          - after a timeout, the write is read back (skipped under VERIFY=off). Found:
+            go on with it. Not found: retry with the same key. Cannot tell
+            (ReadbackUnavailable): raise WriteUnconfirmed, and the run ends escalated;
+          - at most WRITE_ATTEMPTS attempts; one still unconfirmed after the last
+            raises WriteUnconfirmed too.
+
+        Every timeout leaves a call-record line with outcome "timeout"; the attempt
+        that settles the write is recorded by call(), with the same key and attempt."""
+        from harness.tracker import ReadbackUnavailable, TrackerTimeout
+
+        switches = getattr(self.ctx, "switches", None) or {}
+        uuid_keys = switches.get("key_mode") == "uuid"
+        verify = switches.get("verify", "on") != "off"
+        derived = write_key(self.ctx.run_id, plan_step, args)
+
+        def look() -> dict | None:
+            try:
+                return module.existing(self.ctx, args, attempt["key"])
+            except ReadbackUnavailable as exc:
+                self._unconfirmed(name, args, plan_step, start, attempt,
+                                  f"the tracker could not be read to check whether the write happened ({exc})")
+
+        for n in range(1, WRITE_ATTEMPTS + 1):
+            attempt["n"], attempt["key"] = n, (uuid.uuid4().hex if uuid_keys else derived)
+            found = look()                                   # check before every attempt
+            if found is not None:                            # replayed only if it predates this call
+                return module.result_from_row(found, replayed=n == 1)
+            try:
+                return self._run(name, module, {**args, "idempotency_key": attempt["key"]})
+            except TrackerTimeout as exc:
+                self._record(name, args, plan_step, "timeout",
+                             ToolResult(f"timed out: {exc}; the write may have happened", True,
+                                        time.monotonic() - start), key=attempt["key"], attempt=n)
+                if not verify:
+                    continue                                 # the control: retry blind
+                found = look()                               # verify: did the effect happen?
+                if found is not None:                        # it did: this call's own write
+                    return module.result_from_row(found, replayed=False)
+        self._unconfirmed(name, args, plan_step, start, attempt,
+                          f"still unconfirmed after {WRITE_ATTEMPTS} attempts")
+
+    def _unconfirmed(self, name, args, plan_step, start, attempt, why: str):
+        """The third exit: the write cannot be confirmed, so a person must look. Logged,
+        recorded, and raised for the executor, which ends the run escalated."""
+        message = f"{name}: {why}; key {attempt['key']}"
+        self._log_protocol(f"escalate {message}")
+        self._record(name, args, plan_step, "error", ToolResult(f"unconfirmed: {why}", True, time.monotonic() - start),
+                     key=attempt["key"], attempt=attempt["n"])
+        raise WriteUnconfirmed(message)
+
+    def _run(self, name: str, module: ModuleType, tool_input: dict) -> str:
+        """The tool's run(), with a read retried in code when the tracker's database is
+        busy (sqlite's "database is locked", when runs share it): a transient failure,
+        retried at most TRANSIENT_TRIES times with backoff, which costs no turn. A
+        write is never retried here: a write that failed may have happened (Part C)."""
+        import sqlite3
+
+        for attempt in range(1, TRANSIENT_TRIES + 1):
+            try:
+                return module.run(self.ctx, **tool_input)
+            except sqlite3.OperationalError as exc:
+                self._log_protocol(f"{name}: transient {exc} on attempt {attempt}")
+                if is_write(module) or attempt == TRANSIENT_TRIES:
+                    raise ToolError("the tracker was busy and did not answer.",
+                                    retry="Retry the same call after 5 seconds; it can succeed.") from exc
+                time.sleep(TRANSIENT_BACKOFF_S * 2 ** (attempt - 1))
+        raise AssertionError("unreachable")
 
     def _log_protocol(self, line: str) -> None:
         """Write a protocol error in full to runs/<run_id>.harness.log: it is for you, not the model."""
@@ -174,6 +315,45 @@ GENERIC_PROTOCOL_ERROR = ("Error: the harness could not run this call. It is not
 WRAPPED_INPUT = {"_unparsed_arguments", "value"}
 
 MAX_ERROR_CHARS = 600
+
+# Transient failures, retried in code below the model (Part B, task 4).
+TRANSIENT_TRIES = 3
+TRANSIENT_BACKOFF_S = 0.2
+
+# The write tools' modules: never retried blind (Part C).
+WRITE_MODULES = ("post_comment", "open_pr")
+
+# A write makes at most this many attempts, in both of Part D's arms (Part C, task 4).
+WRITE_ATTEMPTS = 3
+
+
+class WriteUnconfirmed(Exception):
+    """A write whose effect cannot be confirmed: the read-back failed, or the attempts
+    ran out. Your code, not the model, stops the run: the executor ends it escalated."""
+
+
+def is_write(module: ModuleType) -> bool:
+    return module.__name__.rsplit(".", 1)[-1] in WRITE_MODULES
+
+
+def write_key(run_id: str, plan_step, args: dict) -> str:
+    """The idempotency key, computed by the harness, never by the model: a hash of the
+    run, the plan step and the arguments in canonical form (keys sorted, no
+    whitespace). The same intended write gets the same key on every attempt."""
+    canonical = json.dumps({"run_id": run_id, "plan_step": plan_step, "args": args},
+                           sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode()).hexdigest()[:32]
+
+
+def cap(text: str) -> str:
+    """An error, cut to MAX_ERROR_CHARS; its repair fact comes first, so a cut one still says what to do."""
+    return text if len(text) <= MAX_ERROR_CHARS else text[:MAX_ERROR_CHARS - 3] + "..."
+
+
+def allow_every_call(name: str, tool_input: dict) -> str | None:
+    """RepoMind's own pre-call hook. It allows every call (returns None); a hook that
+    returns a reason denies the call, and one that raises denies it too."""
+    return None
 
 
 def render_examples(examples: list[dict]) -> str:
@@ -219,9 +399,8 @@ def schema_errors(tool_input: dict, schema: dict) -> list[str]:
 
 def rejection(name: str, problems: list[str]) -> str:
     """A boundary rejection: every field at fault first, then that nothing ran. Capped."""
-    text = (f"Error: {name} was not run; fix these arguments and call it again: "
-            + "; ".join(problems) + ".")
-    return text if len(text) <= MAX_ERROR_CHARS else text[:MAX_ERROR_CHARS - 3] + "..."
+    return cap(f"Error: {name} was not run; fix these arguments and call it again: "
+               + "; ".join(problems) + ". " + NO_RETRY)
 
 
 def result_errors(content, output_schema: dict | None) -> list[str]:

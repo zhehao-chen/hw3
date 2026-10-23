@@ -14,6 +14,7 @@ from pathlib import Path
 import yaml
 
 from harness.client import tool_result
+from tools import WriteUnconfirmed
 
 
 @dataclass(frozen=True)
@@ -62,6 +63,9 @@ def run_loop(client, tools, system: str, user_message: str, bounds: Bounds, trac
         for call in response.tool_calls:
             try:
                 result = tools.call(call.name, call.input)
+            except WriteUnconfirmed as exc:  # a write that cannot be confirmed: a person must look
+                trace.end("escalated", detail=f"a write could not be confirmed: {exc}")
+                return last_text
             except Exception as exc:  # a tool that raises, rather than reporting an error
                 trace.end("tool_error", detail=f"{call.name}: {exc}")
                 return last_text

@@ -50,7 +50,22 @@ def run(ctx, number, branch, title, body, idempotency_key=None):
     try:
         pr = ctx.tracker.open_pr(ctx.run_id, int(number), str(branch), str(title), str(body), key=idempotency_key)
     except IssueNotFound:
-        raise ToolError(f"issue {number} not found")
-    return json.dumps({"pr": f"pr-{pr['id']}", "issue": f"issue-{int(number)}", "branch": str(pr.get("branch", branch)),
-                       "state": str(pr.get("state", "open")), "draft": bool(pr.get("draft", 1)),
-                       "replayed": bool(pr.get("replayed"))})
+        raise ToolError(f"number: issue {number} does not exist in this tracker. Use the issue number "
+                        "the task gives you, as a bare integer such as 4417. No pull request was opened.")
+    return result_from_row(pr)
+
+
+def existing(ctx, args: dict, key: str) -> dict | None:
+    """The check before every attempt, and the read-back after a timeout: this run's
+    open PR from the issue's branch, or None. The branch is a key the PR has by
+    nature, so the check finds the PR whatever key opened it. Raises
+    ReadbackUnavailable when the tracker cannot be read."""
+    rows = ctx.tracker.prs(ctx.run_id, branch=branch_for(args["number"]), state="open")
+    return rows[0] if rows else None
+
+
+def result_from_row(row: dict, replayed: bool | None = None) -> str:
+    """The tool's result, from a PR row the tracker wrote or one read back."""
+    return json.dumps({"pr": f"pr-{row['id']}", "issue": f"issue-{int(row['issue'])}", "branch": str(row["branch"]),
+                       "state": str(row.get("state", "open")), "draft": bool(row.get("draft", 1)),
+                       "replayed": bool(row.get("replayed") if replayed is None else replayed)})

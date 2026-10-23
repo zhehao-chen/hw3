@@ -31,10 +31,25 @@ def run(ctx, number, body, idempotency_key=None):
     from tools import ToolError
 
     if not str(body).strip():
-        raise ToolError("comment body is empty")
+        raise ToolError("body: empty; a comment starts with the two lines \"label: ...\" and "
+                        "\"file: ...\". Nothing was posted.")
     try:
         comment = ctx.tracker.post_comment(ctx.run_id, int(number), str(body), key=idempotency_key)
     except IssueNotFound:
-        raise ToolError(f"issue {number} not found")
-    return json.dumps({"comment": f"comment-{comment['id']}", "issue": f"issue-{int(number)}",
-                       "chars": len(str(comment.get("body", body))), "replayed": bool(comment.get("replayed"))})
+        raise ToolError(f"number: issue {number} does not exist in this tracker. Use the issue number "
+                        "the task gives you, as a bare integer such as 4417. Nothing was posted.")
+    return result_from_row(comment)
+
+
+def existing(ctx, args: dict, key: str) -> dict | None:
+    """The check before every attempt, and the read-back after a timeout: this run's
+    comment written with this key, or None. Raises ReadbackUnavailable when the
+    tracker cannot be read."""
+    return ctx.tracker.comment_by_key(ctx.run_id, key)
+
+
+def result_from_row(row: dict, replayed: bool | None = None) -> str:
+    """The tool's result, from a comment row the tracker wrote or one read back."""
+    return json.dumps({"comment": f"comment-{row['id']}", "issue": f"issue-{int(row['issue'])}",
+                       "chars": len(str(row.get("body", ""))),
+                       "replayed": bool(row.get("replayed") if replayed is None else replayed)})

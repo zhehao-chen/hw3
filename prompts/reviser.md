@@ -11,7 +11,8 @@ You may change a step that failed, to retry it: for a search, change its action 
 say what to look for instead, and keep "$fill" for its query, which the executor
 fills in. You may change or add any step not yet run. Every step still needs one
 tool from the plan's list, named exactly as the list writes it with no prefix such
-as "functions.", an expected_result, and depends_on naming only earlier steps, and
-the last step is tracker_post_comment, whose body is exactly "$fill".
+as "functions.", an expected_result, and depends_on naming only earlier steps. The
+last two steps stay as they are, exactly once each: pr_open_draft, then
+tracker_post_comment, the last step, whose body is exactly "$fill".
 
 Submit the whole repaired plan with submit_plan, once.

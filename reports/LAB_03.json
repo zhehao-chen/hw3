@@ -7,13 +7,72 @@
     "compiles": true
   },
   "failures": {
-    "read_issue": {"transient": [], "permanent": [], "ambiguous": []},
-    "search": {"transient": [], "permanent": [], "ambiguous": []},
-    "read_file": {"transient": [], "permanent": [], "ambiguous": []},
-    "comment": {"transient": [], "permanent": [], "ambiguous": []},
-    "open_pr": {"transient": [], "permanent": [], "ambiguous": []}
+    "read_issue": {
+      "transient": [
+        "the tracker's database is locked or busy (sqlite OperationalError); retried in code up to 3 times with backoff"
+      ],
+      "permanent": [
+        "the issue number does not exist",
+        "the number is not a positive integer (boundary)",
+        "an argument of the wrong type, missing or unknown (boundary)"
+      ],
+      "ambiguous": []
+    },
+    "search": {
+      "transient": [
+        "an I/O error reading the index or a file"
+      ],
+      "permanent": [
+        "the query is empty or only whitespace",
+        "the query is longer than 200 characters",
+        "path_glob is not a valid glob",
+        "an argument of the wrong type, missing or unknown, or an enum value outside its set (boundary)"
+      ],
+      "ambiguous": []
+    },
+    "read_file": {
+      "transient": [
+        "an I/O error reading the file"
+      ],
+      "permanent": [
+        "no file at the path, including a path that differs only in case (the error names the near matches)",
+        "the path is a directory",
+        "the path is under config/",
+        "the path leaves the repository (leading / or ..)",
+        "the file is not text",
+        "the path is empty (boundary)"
+      ],
+      "ambiguous": []
+    },
+    "comment": {
+      "transient": [
+        "the tracker's database is locked before the write commits (sqlite OperationalError): nothing was written"
+      ],
+      "permanent": [
+        "the issue number does not exist",
+        "the body is empty or longer than 4,000 characters (boundary)",
+        "an argument of the wrong type, missing or unknown (boundary)"
+      ],
+      "ambiguous": [
+        "the write times out after it was dispatched (TrackerTimeout): the comment may or may not have been posted"
+      ]
+    },
+    "open_pr": {
+      "transient": [
+        "the tracker's database is locked before the write commits (sqlite OperationalError): nothing was written"
+      ],
+      "permanent": [
+        "the issue number does not exist",
+        "the branch is not repomind/issue-<number> (boundary)",
+        "the title is empty, longer than 120 characters or more than one line (boundary)",
+        "the body is empty or longer than 4,000 characters (boundary)"
+      ],
+      "ambiguous": [
+        "the write times out after it was dispatched (TrackerTimeout): the PR may or may not have been opened"
+      ]
+    }
   },
-  "protocol_error_policy": null,
+  "protocol_error_policy": "generic_result",
   "surface": {
     "tokens_before": null,
     "tokens_after": null,
@@ -25,9 +84,23 @@
     "cost_per_run_all_five": null
   },
   "writes": {
-    "harness": {"runs": null, "comments_per_run_max": null, "duplicate_comment_runs": null, "prs_correct_runs": null,
-                "committed_timeouts": null, "escalated": null, "triage_passes": null},
-    "control": {"runs": null, "comments_per_run_max": null, "duplicate_comment_runs": null, "prs_correct_runs": null,
-                "committed_timeouts": null, "escalated": null, "triage_passes": null}
+    "harness": {
+      "runs": null,
+      "comments_per_run_max": null,
+      "duplicate_comment_runs": null,
+      "prs_correct_runs": null,
+      "committed_timeouts": null,
+      "escalated": null,
+      "triage_passes": null
+    },
+    "control": {
+      "runs": null,
+      "comments_per_run_max": null,
+      "duplicate_comment_runs": null,
+      "prs_correct_runs": null,
+      "committed_timeouts": null,
+      "escalated": null,
+      "triage_passes": null
+    }
   }
 }

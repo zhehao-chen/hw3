@@ -25,7 +25,8 @@ def run(ctx, number):
     try:
         issue = ctx.tracker.issue(int(number))
     except IssueNotFound:
-        raise ToolError(f"issue {number} not found")
+        raise ToolError(f"number: issue {number} does not exist in this tracker. Use the issue number "
+                        "the task gives you, as a bare integer such as 4417.")
     body = str(issue.get("body") or "")
     return json.dumps({"issue": f"issue-{issue['number']}", "number": int(issue["number"]),
                        "title": str(issue["title"]), "author": str(issue["author"]),

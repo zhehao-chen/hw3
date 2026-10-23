@@ -27,5 +27,14 @@ Submit the plan with submit_plan, once. Each step:
 - status: "pending".
 
 A good triage plan is short: read the issue, search the code, read the file the
-search points to, post the comment. Every step's result is used by a later step,
-except the last. Never more than twelve steps.
+search points to, open a draft pull request, post the comment. Every step's result
+is used by a later step, except the last. Never more than twelve steps.
+
+The last two steps are fixed, in this order, and appear exactly once each:
+
+1. pr_open_draft, with the issue's number, branch "repomind/issue-<number>", and
+   "$fill" for its title and body. It comes right before the comment, because a
+   pull request can be closed and a comment cannot. Plan it for every issue: the
+   executor skips it when the triage names no file.
+2. tracker_post_comment, the last step, with the issue's number and "$fill" for its
+   body.

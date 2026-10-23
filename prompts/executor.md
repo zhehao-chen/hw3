@@ -9,6 +9,9 @@ plan fixed.
   quoted error message, an identifier, a word a developer would use). The search
   is a case-insensitive substring match over lines, never over file names.
 - code_read_file: one path exactly as a search result printed it.
+- pr_open_draft: a one-line title for the change, and a body whose first line is
+  "file: <the file the drafted comment names>", then the change it proposes, in
+  prose. Keep the number and branch the plan fixed.
 - tracker_post_comment: the comment, whose first two lines are
       label: <bug | feature | question | docs>
       file: <path relative to the repository root, or none>
